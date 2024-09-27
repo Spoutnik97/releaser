@@ -1,12 +1,12 @@
+use clap::Parser;
 use regex::Regex;
 use serde_json::{Result, Value};
-use std::env;
 use std::fs;
 
 fn get_manifest() -> Result<Value> {
     let file_path = String::from("releaser-manifest.json");
     let manifest_raw =
-        fs::read_to_string(file_path).expect("Should have been able to read the file");
+        fs::read_to_string(file_path).expect("releaser-manifest.json file not found");
 
     let manifest: Value = serde_json::from_str(&manifest_raw)?;
     Ok(manifest)
@@ -141,7 +141,15 @@ struct Changelog {
     breaking: String,
 }
 
-fn update_package(package_path: &str, new_version: &str) -> Result<()> {
+fn update_package(package_path: &str, new_version: &str, dry_run: &DryRunConfig) -> Result<()> {
+    if dry_run.is_dry_run {
+        println!(
+            "Dry run: Would update {} to version {}",
+            package_path, new_version
+        );
+        return Ok(());
+    }
+
     let package_json_path = package_path.to_string() + "/package.json";
     let package_json_raw =
         fs::read_to_string(&package_json_path).expect("Should have been able to read the file");
@@ -176,7 +184,20 @@ fn format_commit_message(input: &str) -> String {
     }
 }
 
-fn update_changelog(package_path: &str, name: &str, changelog_body: &str) -> Result<()> {
+fn update_changelog(
+    package_path: &str,
+    name: &str,
+    changelog_body: &str,
+    dry_run: &DryRunConfig,
+) -> Result<()> {
+    if dry_run.is_dry_run {
+        println!(
+            "Dry run: Would update changelog for {} with new content",
+            name
+        );
+        return Ok(());
+    }
+
     let current_changelog = fs::read_to_string(package_path.to_string() + "/CHANGELOG.md");
     if current_changelog.is_ok() {
         changelog_body.to_string().push_str(
@@ -196,10 +217,32 @@ fn update_changelog(package_path: &str, name: &str, changelog_body: &str) -> Res
     Ok(())
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let environment = &args[1];
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(value_name = "ENVIRONMENT", default_value = "production")]
+    environment: String,
 
+    #[arg(long)]
+    dry_run: bool,
+}
+
+struct DryRunConfig {
+    is_dry_run: bool,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let dry_run_config = DryRunConfig {
+        is_dry_run: args.dry_run,
+    };
+
+    if dry_run_config.is_dry_run {
+        println!("Running in dry-run mode. No changes will be made.");
+    }
+
+    let environment = &args.environment;
     let manifest: Value = get_manifest().unwrap();
 
     let manifest_array = manifest.as_array().unwrap();
@@ -274,39 +317,43 @@ fn main() {
             if new_changelog.is_ok() {
                 let changelog_body = new_changelog.unwrap();
 
-                update_changelog(&package_path, &name, &changelog_body)
+                update_changelog(&package_path, &name, &changelog_body, &dry_run_config)
                     .expect("Changelog update failed");
 
                 pull_request_content.push_str(format!("### {} - {}\n", name, new_version).as_str());
                 pull_request_content.push_str(format!("{}\n\n", changelog_body).as_str());
             }
 
-            update_package(package_path, &new_version).unwrap();
+            update_package(package_path, &new_version, &dry_run_config).unwrap();
 
             println!(
                 "Updated package.json of {} to version {}",
                 name, new_version
             );
 
-            std::process::Command::new("git")
-                .args(&["add", "."])
-                .output()
-                .expect("Failed to execute git add command");
+            if !dry_run_config.is_dry_run {
+                std::process::Command::new("git")
+                    .args(&["add", "."])
+                    .output()
+                    .expect("Failed to execute git add command");
 
-            let commit_message = format!("chore(release): bump {} to v{}", name, new_version);
-            std::process::Command::new("git")
-                .args(&["commit", "-m", &commit_message])
-                .output()
-                .expect("Failed to execute git commit command");
-            println!("Created new commit: {}", commit_message);
+                let commit_message = format!("chore(release): bump {} to v{}", name, new_version);
+                std::process::Command::new("git")
+                    .args(&["commit", "-m", &commit_message])
+                    .output()
+                    .expect("Failed to execute git commit command");
+                println!("Created new commit: {}", commit_message);
 
-            let tag = format!("{}-v{}", name, new_version);
-            std::process::Command::new("git")
-                .args(&["tag", "-a", &tag, "-m", &commit_message])
-                .output()
-                .expect("Failed to execute git tag command");
+                let tag = format!("{}-v{}", name, new_version);
+                std::process::Command::new("git")
+                    .args(&["tag", "-a", &tag, "-m", &commit_message])
+                    .output()
+                    .expect("Failed to execute git tag command");
 
-            println!("Created new tag: {}", tag);
+                println!("Created new tag: {}", tag);
+            } else {
+                println!("Dry run: Would execute git commands");
+            }
         }
     }
     fs::write("pull_request_content.md", pull_request_content).unwrap();
