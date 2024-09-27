@@ -3,22 +3,13 @@ use serde_json::{Result, Value};
 use std::env;
 use std::fs;
 
-fn get_manifest(environment: &str) -> Result<Value> {
-    if environment != "production" {
-        let file_path = String::from("releaser-manifest.json");
-        let manifest_raw =
-            fs::read_to_string(file_path).expect("Should have been able to read the file");
+fn get_manifest() -> Result<Value> {
+    let file_path = String::from("releaser-manifest.json");
+    let manifest_raw =
+        fs::read_to_string(file_path).expect("Should have been able to read the file");
 
-        let manifest: Value = serde_json::from_str(&manifest_raw)?;
-        Ok(manifest)
-    } else {
-        let file_path = String::from("releaser-manifest.production.json");
-        let manifest_raw =
-            fs::read_to_string(file_path).expect("Should have been able to read the file");
-
-        let manifest: Value = serde_json::from_str(&manifest_raw)?;
-        Ok(manifest)
-    }
+    let manifest: Value = serde_json::from_str(&manifest_raw)?;
+    Ok(manifest)
 }
 
 fn get_version_and_name(path: &str) -> Result<(String, String)> {
@@ -147,6 +138,7 @@ struct Changelog {
     features: String,
     fixes: String,
     perf: String,
+    breaking: String,
 }
 
 fn update_package(package_path: &str, new_version: &str) -> Result<()> {
@@ -208,7 +200,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let environment = &args[1];
 
-    let manifest: Value = get_manifest(environment).unwrap();
+    let manifest: Value = get_manifest().unwrap();
 
     let manifest_array = manifest.as_array().unwrap();
 
@@ -219,7 +211,10 @@ fn main() {
             let (name, version) = get_version_and_name(package_path).unwrap();
             let last_tag = get_latest_tag(&name, &version).unwrap();
 
-            println!("{}, -> {}: {} => {}", package_path, name, version, last_tag);
+            println!(
+                "{}, -> {}: {} => tag: {}",
+                package_path, name, version, last_tag
+            );
 
             let output = std::process::Command::new("git")
                 .args(&["diff", "--name-only", &last_tag, "HEAD", "--", package_path])
@@ -245,6 +240,7 @@ fn main() {
                 features: String::new(),
                 fixes: String::new(),
                 perf: String::new(),
+                breaking: String::new(),
             };
 
             let mut semver_target: Semver = Semver::Patch;
@@ -264,6 +260,11 @@ fn main() {
                     changelog.perf.push_str(&commit_message);
                     changelog.perf.push_str("\n");
                     semver_target = get_higher_semver(semver_target, Semver::Patch);
+                }
+                if line.contains("!feat(") || line.contains("!fix(") {
+                    changelog.breaking.push_str(&commit_message);
+                    changelog.breaking.push_str("\n");
+                    semver_target = get_higher_semver(semver_target, Semver::Major);
                 }
             }
 
@@ -297,6 +298,7 @@ fn main() {
                 .args(&["commit", "-m", &commit_message])
                 .output()
                 .expect("Failed to execute git commit command");
+            println!("Created new commit: {}", commit_message);
 
             let tag = format!("{}-v{}", name, new_version);
             std::process::Command::new("git")
