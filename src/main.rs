@@ -217,6 +217,49 @@ fn update_changelog(
     Ok(())
 }
 
+fn increase_extra_files_version(
+    extra_files: &Vec<serde_json::Value>,
+    new_version: &str,
+    dry_run: &DryRunConfig,
+) {
+    for extra_file in extra_files {
+        if let Some(file_path) = extra_file.as_str() {
+            let contents = fs::read_to_string(file_path).expect("Failed to read file");
+
+            let new_contents: String = contents
+                .lines()
+                .map(|line| {
+                    if line.contains("// x-releaser-version") {
+                        let parts: Vec<&str> = line.split("// x-releaser-version").collect();
+                        let version_pattern =
+                            regex::Regex::new(r"\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?").unwrap();
+
+                        if let Some(version_match) = version_pattern.find(parts[0]) {
+                            let old_version = version_match.as_str();
+                            line.replace(old_version, new_version)
+                        } else {
+                            line.to_string()
+                        }
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            if !dry_run.is_dry_run {
+                fs::write(file_path, new_contents).expect("Failed to write to file");
+            } else {
+                println!("Dry run: Would update version in file: {}", file_path);
+            }
+
+            println!("Updated version in file: {}", file_path);
+        } else {
+            println!("Invalid file path in extra_files");
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -331,6 +374,9 @@ fn main() {
                 name, new_version
             );
 
+            let extra_files = package["extraFiles"].as_array().unwrap();
+            increase_extra_files_version(&extra_files.to_vec(), &new_version, &dry_run_config);
+
             if !dry_run_config.is_dry_run {
                 std::process::Command::new("git")
                     .args(&["add", "."])
@@ -363,6 +409,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_increase_version() {
@@ -432,5 +480,51 @@ mod tests {
             ),
             "**quote request line**: fix React Hook Form context in sync with API"
         );
+    }
+
+    #[test]
+    fn test_increase_extra_files_version() {
+        let test_cases = vec![
+            ("1.2.3", "1.2.4"),
+            ("1.2.3", "1.3.0"),
+            ("1.2.3", "2.0.0"),
+            ("1.2.3-beta", "1.2.3"),
+            ("1.2.3-beta.1", "1.2.3"),
+            ("1.2.3", "1.2.4-beta"),
+            ("1.2.3", "1.3.0-beta"),
+            ("1.2.3", "2.0.0-beta"),
+            ("1.2.3-beta", "1.2.4-beta.1"),
+            ("1.2.3-beta.1", "1.2.4-beta.2"),
+        ];
+
+        for (old_version, new_version) in test_cases {
+            let temp_file = NamedTempFile::new().unwrap();
+            let file_path = temp_file.path().to_str().unwrap().to_string();
+
+            let content = format!(
+                "const VERSION = '{}'; // x-releaser-version\nOther content\n",
+                old_version
+            );
+            fs::write(&file_path, content).unwrap();
+
+            let extra_files = vec![serde_json::Value::String(file_path.clone())];
+
+            increase_extra_files_version(
+                &extra_files,
+                new_version,
+                &DryRunConfig { is_dry_run: false },
+            );
+
+            let updated_content = fs::read_to_string(&file_path).unwrap();
+
+            let expected_line = format!("const VERSION = '{}'; // x-releaser-version", new_version);
+            assert!(
+                updated_content.contains(&expected_line),
+                "Failed to update from {} to {}",
+                old_version,
+                new_version
+            );
+            assert!(updated_content.contains("Other content"));
+        }
     }
 }
