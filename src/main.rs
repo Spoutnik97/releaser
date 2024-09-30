@@ -185,36 +185,33 @@ fn format_commit_message(input: &str) -> String {
 }
 
 fn update_changelog(
-    package_path: &str,
+    current_changelog: Option<&str>,
     name: &str,
-    changelog_body: &str,
+    new_changelog_body: &str,
     dry_run: &DryRunConfig,
-) -> Result<()> {
+) -> Result<String> {
     if dry_run.is_dry_run {
         println!(
             "Dry run: Would update changelog for {} with new content",
             name
         );
-        return Ok(());
+        return Ok(new_changelog_body.to_string());
     }
 
-    let current_changelog = fs::read_to_string(package_path.to_string() + "/CHANGELOG.md");
-    if current_changelog.is_ok() {
-        changelog_body.to_string().push_str(
-            &current_changelog
-                .unwrap()
-                .replace(format!("# {}", name).as_str(), ""),
-        );
-        fs::write(package_path.to_string() + "/CHANGELOG.md", changelog_body)
-            .expect("Failed to write updated CHANGELOG.md");
+    let mut updated_changelog = new_changelog_body.to_string();
+    if let Some(current) = current_changelog {
+        // Remove the package name from the existing changelog
+        let existing_content = current.replace(&format!("# {}\n", name), "");
+        // Append the existing content to the new changelog
+        updated_changelog.push_str(&existing_content);
     } else {
         println!(
-            "No changelog found for package {}. Creating new one...",
-            package_path
+            "No existing changelog found for package {}. Creating new one...",
+            name
         );
     }
 
-    Ok(())
+    Ok(updated_changelog)
 }
 
 fn increase_extra_files_version(
@@ -360,8 +357,23 @@ fn main() {
             if new_changelog.is_ok() {
                 let changelog_body = new_changelog.unwrap();
 
-                update_changelog(&package_path, &name, &changelog_body, &dry_run_config)
-                    .expect("Changelog update failed");
+                let current_changelog =
+                    fs::read_to_string(package_path.to_string() + "/CHANGELOG.md").ok();
+                let updated_changelog = update_changelog(
+                    current_changelog.as_deref(),
+                    &name,
+                    &changelog_body,
+                    &dry_run_config,
+                )
+                .expect("Changelog update failed");
+
+                if !dry_run_config.is_dry_run {
+                    fs::write(
+                        package_path.to_string() + "/CHANGELOG.md",
+                        updated_changelog,
+                    )
+                    .expect("Failed to write updated CHANGELOG.md");
+                }
 
                 pull_request_content.push_str(format!("### {} - {}\n", name, new_version).as_str());
                 pull_request_content.push_str(format!("{}\n\n", changelog_body).as_str());
@@ -526,5 +538,62 @@ mod tests {
             );
             assert!(updated_content.contains("Other content"));
         }
+    }
+
+    #[test]
+    fn test_update_changelog() {
+        let name = "test-package";
+        let new_version = "1.2.3";
+        let dry_run_config = DryRunConfig { is_dry_run: false };
+
+        // Test case 1: New changelog, no existing content
+        let changelog = Changelog {
+            features: "- New feature 1\n- New feature 2\n".to_string(),
+            fixes: "- Bug fix 1\n".to_string(),
+            perf: "- Performance improvement 1\n".to_string(),
+            breaking: "".to_string(),
+        };
+        let new_changelog_body = get_new_changelog(name, new_version, changelog).unwrap();
+        let result = update_changelog(None, name, &new_changelog_body, &dry_run_config).unwrap();
+
+        assert!(result.starts_with(&format!("# {}\n## Version {}", name, new_version)));
+        assert!(result.contains("### Features"));
+        assert!(result.contains("### Fixes"));
+        assert!(result.contains("### Performance"));
+
+        // Test case 2: Updating existing changelog
+        let existing_changelog = format!(
+            "# {}\n## Version 1.1.0\n### Features\n- Old feature\n",
+            name
+        );
+        let result = update_changelog(
+            Some(&existing_changelog),
+            name,
+            &new_changelog_body,
+            &dry_run_config,
+        )
+        .unwrap();
+
+        assert!(result.starts_with(&format!("# {}\n## Version {}", name, new_version)));
+        assert!(result.contains("- New feature 1"));
+        assert!(result.contains("## Version 1.1.0"));
+        assert!(result.contains("- Old feature"));
+
+        // Ensure new version comes before old version
+        assert!(
+            result.find("## Version 1.2.3").unwrap() < result.find("## Version 1.1.0").unwrap()
+        );
+
+        // Test case 3: Dry run
+        let dry_run_config = DryRunConfig { is_dry_run: true };
+        let result = update_changelog(
+            Some(&existing_changelog),
+            name,
+            &new_changelog_body,
+            &dry_run_config,
+        )
+        .unwrap();
+
+        assert_eq!(result, new_changelog_body);
     }
 }
