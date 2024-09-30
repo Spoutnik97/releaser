@@ -1,1 +1,1 @@
-["packages/api"]
+[{ "path": "packages/api", "extraFiles": ["index.js"] }]

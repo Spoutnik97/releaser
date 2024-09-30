@@ -249,8 +249,8 @@ fn main() {
 
     let mut pull_request_content = String::new();
 
-    for key in manifest_array {
-        if let Some(package_path) = key.as_str() {
+    for package in manifest_array {
+        if let Some(package_path) = package["path"].as_str() {
             let (name, version) = get_version_and_name(package_path).unwrap();
             let last_tag = get_latest_tag(&name, &version).unwrap();
 
