@@ -1,7 +1,7 @@
 use clap::Parser;
 use regex::Regex;
 use serde_json::{Result, Value};
-use std::fs;
+use std::{collections::HashMap, fs};
 
 fn get_manifest() -> Result<Value> {
     let file_path = String::from("releaser-manifest.json");
@@ -265,6 +265,9 @@ struct Args {
 
     #[arg(long)]
     dry_run: bool,
+
+    #[arg(long)]
+    tag: bool,
 }
 
 struct DryRunConfig {
@@ -289,6 +292,8 @@ fn main() {
 
     let mut pull_request_content = String::new();
 
+    let mut name_to_version = HashMap::new();
+
     for package in manifest_array {
         if let Some(package_path) = package["path"].as_str() {
             let (name, version) = get_version_and_name(package_path).unwrap();
@@ -298,6 +303,22 @@ fn main() {
                 "{}, -> {}: {} => tag: {}",
                 package_path, name, version, last_tag
             );
+
+            if args.tag {
+                let tag = format!("{}-v{}", name, version);
+                if !dry_run_config.is_dry_run {
+                    std::process::Command::new("git")
+                        .args(&["tag", "-a", &tag, "-m", &tag])
+                        .output()
+                        .expect("Failed to execute git tag command");
+
+                    println!("Created new tag: {}", tag);
+                } else {
+                    println!("Dry run: would create tag {}", tag);
+                }
+
+                continue;
+            }
 
             let output = std::process::Command::new("git")
                 .args(&["diff", "--name-only", &last_tag, "HEAD", "--", package_path])
@@ -389,30 +410,31 @@ fn main() {
             let extra_files = package["extraFiles"].as_array().unwrap();
             increase_extra_files_version(&extra_files.to_vec(), &new_version, &dry_run_config);
 
-            if !dry_run_config.is_dry_run {
-                std::process::Command::new("git")
-                    .args(&["add", "."])
-                    .output()
-                    .expect("Failed to execute git add command");
-
-                let commit_message = format!("chore(release): bump {} to v{}", name, new_version);
-                std::process::Command::new("git")
-                    .args(&["commit", "-m", &commit_message])
-                    .output()
-                    .expect("Failed to execute git commit command");
-                println!("Created new commit: {}", commit_message);
-
-                let tag = format!("{}-v{}", name, new_version);
-                std::process::Command::new("git")
-                    .args(&["tag", "-a", &tag, "-m", &commit_message])
-                    .output()
-                    .expect("Failed to execute git tag command");
-
-                println!("Created new tag: {}", tag);
-            } else {
-                println!("Dry run: Would execute git commands");
-            }
+            name_to_version.insert(name.to_string(), new_version.to_string());
         }
+    }
+
+    if args.tag {
+        return ();
+    }
+    if !dry_run_config.is_dry_run {
+        std::process::Command::new("git")
+            .args(&["add", "."])
+            .output()
+            .expect("Failed to execute git add command");
+        let mut commit_message = String::new();
+        commit_message.push_str("chore(release): bump packages");
+        for (name, version) in name_to_version {
+            commit_message.push_str(&format!("- {}: {}", name, version));
+        }
+
+        std::process::Command::new("git")
+            .args(&["commit", "-m", &commit_message])
+            .output()
+            .expect("Failed to execute git commit command");
+        println!("Created new commit: {}", commit_message);
+    } else {
+        println!("Dry run: Would execute git commands");
     }
     fs::write("pull_request_content.md", pull_request_content).unwrap();
     println!("Pull request content written to pull_request_content.md");
