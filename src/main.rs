@@ -223,7 +223,7 @@ fn increase_extra_files_version(
         if let Some(file_path) = extra_file.as_str() {
             let contents = fs::read_to_string(file_path).expect("Failed to read file");
 
-            let new_contents: String = contents
+            let mut new_contents: String = contents
                 .lines()
                 .map(|line| {
                     if line.contains("// x-releaser-version") {
@@ -243,6 +243,11 @@ fn increase_extra_files_version(
                 })
                 .collect::<Vec<String>>()
                 .join("\n");
+
+            // Preserve the original file's ending (with or without newline)
+            if contents.ends_with('\n') {
+                new_contents.push('\n');
+            }
 
             if !dry_run.is_dry_run {
                 fs::write(file_path, new_contents).expect("Failed to write to file");
