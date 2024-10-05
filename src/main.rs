@@ -412,8 +412,11 @@ fn main() {
                 name, new_version
             );
 
-            let extra_files = package["extraFiles"].as_array().unwrap();
-            increase_extra_files_version(&extra_files.to_vec(), &new_version, &dry_run_config);
+            if let Some(extra_files) = package["extraFiles"].as_array() {
+                increase_extra_files_version(&extra_files.to_vec(), &new_version, &dry_run_config);
+            } else {
+                println!("No extraFiles found for package {}", name);
+            }
 
             name_to_version.insert(name.to_string(), new_version.to_string());
         }
