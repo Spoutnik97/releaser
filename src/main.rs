@@ -1,7 +1,11 @@
 use clap::Parser;
 use regex::Regex;
 use serde_json::{Result, Value};
-use std::{collections::HashMap, fs};
+use std::io::Write;
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+};
 
 fn get_manifest() -> Result<Value> {
     let file_path = String::from("releaser-manifest.json");
@@ -299,6 +303,8 @@ fn main() {
 
     let mut name_to_version = HashMap::new();
 
+    let mut tags_to_create = Vec::new();
+
     for package in manifest_array {
         if let Some(package_path) = package["path"].as_str() {
             let (name, version) = get_version_and_name(package_path).unwrap();
@@ -312,14 +318,40 @@ fn main() {
             if args.tag {
                 let tag = format!("{}-v{}", name, version);
                 if !dry_run_config.is_dry_run {
-                    std::process::Command::new("git")
-                        .args(&["tag", "-a", &tag, "-m", &tag])
+                    // Check if the tag already exists
+                    let tag_exists = std::process::Command::new("git")
+                        .args(&["tag", "-l", &tag])
                         .output()
-                        .expect("Failed to execute git tag command");
+                        .map(|output| !output.stdout.is_empty())
+                        .unwrap_or(false);
 
-                    println!("Created new tag: {}", tag);
+                    if tag_exists {
+                        println!("Tag {} already exists. Skipping tag creation.", tag);
+                    } else {
+                        tags_to_create.push(tag.clone());
+                        let tag_result = std::process::Command::new("git")
+                            .args(&["tag", "-a", &tag, "-m", &tag])
+                            .output();
+
+                        match tag_result {
+                            Ok(output) => {
+                                if output.status.success() {
+                                    println!("Created new tag: {}", tag);
+                                } else {
+                                    let error = String::from_utf8_lossy(&output.stderr);
+                                    eprintln!("Failed to create tag: {}. Error: {}", tag, error);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Error executing git tag command: {}", e);
+                            }
+                        }
+                    }
                 } else {
-                    println!("Dry run: would create tag {}", tag);
+                    println!(
+                        "Dry run: would create tag {} (if it doesn't already exist)",
+                        tag
+                    );
                 }
 
                 continue;
@@ -423,6 +455,24 @@ fn main() {
     }
 
     if args.tag {
+        let tags_file_path = "tags_to_create.txt";
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(tags_file_path)
+            .expect("Failed to open tags file");
+
+        for tag in &tags_to_create {
+            if let Err(e) = writeln!(file, "{}", tag) {
+                eprintln!("Couldn't write to file: {}", e);
+            }
+        }
+
+        println!(
+            "List of tags to create has been written to {}",
+            tags_file_path
+        );
         return ();
     }
     if !dry_run_config.is_dry_run {
