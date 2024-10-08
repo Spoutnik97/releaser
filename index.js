@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "child_process";
-import { join } from "path";
+const { execFileSync } = require("child_process");
+const { join } = require("path");
 
 const executablePath = join(__dirname, "bin", "releaser");
 

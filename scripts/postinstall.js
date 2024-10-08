@@ -1,7 +1,7 @@
-import { existsSync, renameSync, chmodSync } from "fs";
-import { join } from "path";
-import { platform as _platform, arch as _arch } from "os";
-import { execSync } from "child_process";
+const { existsSync, renameSync, chmodSync } = require("fs");
+const { join } = require("path");
+const { platform: _platform, arch: _arch } = require("os");
+const { execSync } = require("child_process");
 
 const binPath = join(__dirname, "..", "bin");
 const platform = _platform();
@@ -38,17 +38,6 @@ if (existsSync(sourcePath)) {
   renameSync(sourcePath, destPath);
   chmodSync(destPath, 0o755); // Make the file executable
   console.log(`Installed releaser for ${platform} (${arch})`);
-
-  // For macOS, we need to remove quarantine attribute
-  if (platform === "darwin") {
-    try {
-      execSync(`xattr -d com.apple.quarantine "${destPath}"`);
-    } catch (error) {
-      console.warn(
-        "Failed to remove quarantine attribute. You may need to allow the app in System Preferences > Security & Privacy.",
-      );
-    }
-  }
 } else {
   console.error(`Executable not found: ${executableName}`);
   process.exit(1);
