@@ -11,6 +11,18 @@ Advantages of Releaser over other release automation tools:
 - **Monorepo support**: Releaser is designed to work with monorepos, allowing you to manage releases for multiple packages within a single repository.
 - **Conventional Commits support**: Releaser adheres to the Conventional Commits specification, ensuring that your release notes are structured and easy to understand.
 
+## Features
+
+- Create releases for your Node.js projects.
+- Supports monorepos.
+- Follows the Conventional Commits specification.
+- Automatically creates Git tags for the new versions.
+- Automatically updates the CHANGELOG.md file.
+- Automatically updates the package.json file.
+- Automatically updates the version in extra files.
+- Optionally creates a pull request with the release notes.
+- Optionally creates a tag for the new versions and deploys the new version to a specified environment.
+
 > **Note:** While Releaser currently supports Node.js projects, support for other languages could be added in the future through custom adapters. Stay tuned for updates!
 
 ## Setup
