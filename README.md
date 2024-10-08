@@ -75,7 +75,7 @@ jobs:
         run: git checkout -b production-release
 
       - name: Releaser
-        run: ./releaser/releaser-linux production
+        run: npx -y releaser-cli production
 
       - name: Push
         run: |
@@ -129,8 +129,6 @@ jobs:
     outputs:
       tag_created: ${{ steps.push_tags.outputs.tag_created }}
       api_tag_created: ${{ steps.push_tags.outputs.api_tag_created }}
-      web_tag_created: ${{ steps.push_tags.outputs.web_tag_created }}
-      pycad_tag_created: ${{ steps.push_tags.outputs.pycad_tag_created }}
       environment: ${{ steps.determine_env.outputs.ENVIRONMENT }}
     steps:
       - name: Checkout main
@@ -158,8 +156,7 @@ jobs:
           git config user.email github-actions@github.com
 
       - name: Create tag with releaser
-        run: |
-          ./releaser/releaser-linux ${{ env.ENVIRONMENT }} --tag
+        run: npx -y releaser-cli ${{ env.ENVIRONMENT }} --tag
 
       - name: Push tags
         id: push_tags
@@ -179,13 +176,13 @@ jobs:
 
   deploy-api-staging:
     needs: create-tag
-    if: needs.create-tag.outputs.web_tag_created == 'true' && needs.create-tag.outputs.environment == 'staging'
+    if: needs.create-tag.outputs.api_tag_created == 'true' && needs.create-tag.outputs.environment == 'staging'
     uses: ./.github/workflows/YOUR_STAGING_WORKFLOW.yml
     secrets: inherit
 
   deploy-api-production:
     needs: create-tag
-    if: needs.create-tag.outputs.web_tag_created == 'true' && needs.create-tag.outputs.environment == 'production'
+    if: needs.create-tag.outputs.api_tag_created == 'true' && needs.create-tag.outputs.environment == 'production'
     uses: ./.github/workflows/YOUR_PRODUCTION_WORKFLOW.yml
     secrets: inherit
 ```
