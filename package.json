@@ -1,0 +1,24 @@
+{
+  "name": "releaser-cli",
+  "version": "1.0.0",
+  "description": "CLI tool for releasing packages",
+  "main": "index.js",
+  "bin": {
+    "releaser": "./index.js"
+  },
+  "scripts": {
+    "build": "./build.sh",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "files": [
+    "index.js",
+    "bin/releaser-*",
+    "scripts/postinstall.js"
+  ],
+  "keywords": [
+    "release",
+    "cli"
+  ],
+  "author": "Guillaume Piedigrossi",
+  "license": "MIT"
+}
