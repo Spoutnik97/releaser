@@ -433,8 +433,14 @@ fn main() {
                     .expect("Failed to write updated CHANGELOG.md");
                 }
 
-                pull_request_content.push_str(format!("### {} - {}\n", name, new_version).as_str());
-                pull_request_content.push_str(format!("{}\n\n", changelog_body).as_str());
+                let filtered_changelog_body: String = changelog_body
+                    .lines()
+                    .filter(|line| !line.starts_with('#'))
+                    .collect::<Vec<&str>>()
+                    .join("\n");
+
+                pull_request_content.push_str(format!("## {} - {}\n", name, new_version).as_str());
+                pull_request_content.push_str(format!("{}\n\n", filtered_changelog_body).as_str());
             }
 
             update_package(package_path, &new_version, &dry_run_config).unwrap();
