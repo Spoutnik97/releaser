@@ -269,12 +269,15 @@ fn increase_extra_files_version(
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// The deployment environment (e.g., "production", "staging")
     #[arg(value_name = "ENVIRONMENT", default_value = "production")]
     environment: String,
 
+    /// Perform a dry run without making any actual changes
     #[arg(long)]
     dry_run: bool,
 
+    /// Create git tags for the current versions
     #[arg(long)]
     tag: bool,
 }
