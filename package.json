@@ -1,7 +1,19 @@
 {
   "name": "releaser-cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "CLI tool for releasing packages",
+  "author": {
+    "name": "Guillaume Piedigrossi",
+    "email": "guillaume.piedigrossi@gadz.org"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Spoutnik97/releaser.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Spoutnik97/releaser/issues"
+  },
+  "homepage": "https://github.com/Spoutnik97/releaser#readme",
   "main": "index.js",
   "bin": {
     "releaser": "./index.js"
@@ -21,6 +33,5 @@
     "node",
     "monorepo"
   ],
-  "author": "Guillaume Piedigrossi",
   "license": "MIT"
 }
