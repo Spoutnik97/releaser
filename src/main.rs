@@ -1,5 +1,6 @@
 use clap::Parser;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Result, Value};
 use std::io::Write;
 use std::{
@@ -7,13 +8,34 @@ use std::{
     fs::{self, OpenOptions},
 };
 
-fn get_manifest() -> Result<Value> {
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct Package {
+    path: String,
+    #[serde(default)]
+    #[serde(rename = "extraFiles")]
+    extra_files: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct Manifest {
+    packages: Vec<Package>,
+}
+
+fn get_manifest() -> Result<Manifest> {
     let file_path = String::from("releaser-manifest.json");
     let manifest_raw =
         fs::read_to_string(file_path).expect("releaser-manifest.json file not found");
+    let packages: Vec<Package> = serde_json::from_str(&manifest_raw)?;
+    Ok(Manifest { packages })
+}
 
-    let manifest: Value = serde_json::from_str(&manifest_raw)?;
-    Ok(manifest)
+fn has_dependency_changes(package: &Package, changed_packages: &HashMap<String, String>) -> bool {
+    package
+        .dependencies
+        .iter()
+        .any(|dep| changed_packages.contains_key(dep))
 }
 
 fn get_version_and_name(path: &str) -> Result<(String, String)> {
@@ -219,51 +241,69 @@ fn update_changelog(
 }
 
 fn increase_extra_files_version(
-    extra_files: &Vec<serde_json::Value>,
+    extra_files: &Vec<String>,
     new_version: &str,
     dry_run: &DryRunConfig,
 ) {
     for extra_file in extra_files {
-        if let Some(file_path) = extra_file.as_str() {
-            let contents = fs::read_to_string(file_path).expect("Failed to read file");
+        let contents = fs::read_to_string(extra_file).expect("Failed to read file");
 
-            let mut new_contents: String = contents
-                .lines()
-                .map(|line| {
-                    if line.contains("// x-releaser-version") {
-                        let parts: Vec<&str> = line.split("// x-releaser-version").collect();
-                        let version_pattern =
-                            regex::Regex::new(r"\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?").unwrap();
+        let mut new_contents: String = contents
+            .lines()
+            .map(|line| {
+                if line.contains("// x-releaser-version") {
+                    let parts: Vec<&str> = line.split("// x-releaser-version").collect();
+                    let version_pattern =
+                        regex::Regex::new(r"\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?").unwrap();
 
-                        if let Some(version_match) = version_pattern.find(parts[0]) {
-                            let old_version = version_match.as_str();
-                            line.replace(old_version, new_version)
-                        } else {
-                            line.to_string()
-                        }
+                    if let Some(version_match) = version_pattern.find(parts[0]) {
+                        let old_version = version_match.as_str();
+                        line.replace(old_version, new_version)
                     } else {
                         line.to_string()
                     }
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
 
-            // Preserve the original file's ending (with or without newline)
-            if contents.ends_with('\n') {
-                new_contents.push('\n');
-            }
+        // Preserve the original file's ending (with or without newline)
+        if contents.ends_with('\n') {
+            new_contents.push('\n');
+        }
 
-            if !dry_run.is_dry_run {
-                fs::write(file_path, new_contents).expect("Failed to write to file");
-            } else {
-                println!("Dry run: Would update version in file: {}", file_path);
-            }
-
-            println!("Updated version in file: {}", file_path);
+        if !dry_run.is_dry_run {
+            fs::write(extra_file, new_contents).expect("Failed to write to file");
         } else {
-            println!("Invalid file path in extra_files");
+            println!("Dry run: Would update version in file: {}", extra_file);
+        }
+
+        println!("Updated version in file: {}", extra_file);
+    }
+}
+
+fn determine_semver_target(name: &str, version: &str) -> Semver {
+    let last_tag = get_latest_tag(name, version).unwrap();
+    let interval = format!("{}..HEAD", last_tag);
+    let git_log_output = std::process::Command::new("git")
+        .args(&["log", &interval, "--oneline"])
+        .output()
+        .expect("Failed to execute git log command");
+
+    let git_log_result = String::from_utf8_lossy(&git_log_output.stdout);
+
+    let mut semver_target = Semver::Patch;
+    for line in git_log_result.lines() {
+        if line.contains("feat(") {
+            semver_target = get_higher_semver(semver_target, Semver::Minor);
+        }
+        if line.contains("!feat(") || line.contains("!fix(") {
+            return Semver::Major;
         }
     }
+    semver_target
 }
 
 #[derive(Parser, Debug)]
@@ -298,9 +338,8 @@ fn main() {
     }
 
     let environment = &args.environment;
-    let manifest: Value = get_manifest().unwrap();
-
-    let manifest_array = manifest.as_array().unwrap();
+    let manifest: Manifest = get_manifest().unwrap();
+    let mut changed_packages = HashMap::new();
 
     let mut pull_request_content = String::new();
 
@@ -308,158 +347,192 @@ fn main() {
 
     let mut tags_to_create = Vec::new();
 
-    for package in manifest_array {
-        if let Some(package_path) = package["path"].as_str() {
-            let (name, version) = get_version_and_name(package_path).unwrap();
-            let last_tag = get_latest_tag(&name, &version).unwrap();
+    for package in &manifest.packages {
+        let (name, version) = get_version_and_name(&package.path).unwrap();
+        let last_tag = get_latest_tag(&name, &version).unwrap();
 
-            println!(
-                "{}, -> {}: {} => tag: {}",
-                package_path, name, version, last_tag
-            );
+        println!(
+            "{}, -> {}: {} => tag: {}",
+            &package.path, name, version, last_tag
+        );
 
-            if args.tag {
-                let tag = format!("{}-v{}", name, version);
-                if !dry_run_config.is_dry_run {
-                    // Check if the tag already exists
-                    let tag_exists = std::process::Command::new("git")
-                        .args(&["tag", "-l", &tag])
-                        .output()
-                        .map(|output| !output.stdout.is_empty())
-                        .unwrap_or(false);
+        if args.tag {
+            let tag = format!("{}-v{}", name, version);
+            if !dry_run_config.is_dry_run {
+                // Check if the tag already exists
+                let tag_exists = std::process::Command::new("git")
+                    .args(&["tag", "-l", &tag])
+                    .output()
+                    .map(|output| !output.stdout.is_empty())
+                    .unwrap_or(false);
 
-                    if tag_exists {
-                        println!("Tag {} already exists. Skipping tag creation.", tag);
-                    } else {
-                        tags_to_create.push(tag.clone());
-                        let tag_result = std::process::Command::new("git")
-                            .args(&["tag", "-a", &tag, "-m", &tag])
-                            .output();
+                if tag_exists {
+                    println!("Tag {} already exists. Skipping tag creation.", tag);
+                } else {
+                    tags_to_create.push(tag.clone());
+                    let tag_result = std::process::Command::new("git")
+                        .args(&["tag", "-a", &tag, "-m", &tag])
+                        .output();
 
-                        match tag_result {
-                            Ok(output) => {
-                                if output.status.success() {
-                                    println!("Created new tag: {}", tag);
-                                } else {
-                                    let error = String::from_utf8_lossy(&output.stderr);
-                                    eprintln!("Failed to create tag: {}. Error: {}", tag, error);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Error executing git tag command: {}", e);
+                    match tag_result {
+                        Ok(output) => {
+                            if output.status.success() {
+                                println!("Created new tag: {}", tag);
+                            } else {
+                                let error = String::from_utf8_lossy(&output.stderr);
+                                eprintln!("Failed to create tag: {}. Error: {}", tag, error);
                             }
                         }
+                        Err(e) => {
+                            eprintln!("Error executing git tag command: {}", e);
+                        }
                     }
-                } else {
-                    println!(
-                        "Dry run: would create tag {} (if it doesn't already exist)",
-                        tag
-                    );
                 }
-
-                continue;
+            } else {
+                println!(
+                    "Dry run: would create tag {} (if it doesn't already exist)",
+                    tag
+                );
             }
 
-            let output = std::process::Command::new("git")
-                .args(&["diff", "--name-only", &last_tag, "HEAD", "--", package_path])
-                .output()
-                .expect("Failed to execute git diff command");
+            continue;
+        }
 
-            let git_diff_result = String::from_utf8_lossy(&output.stdout);
+        let output = std::process::Command::new("git")
+            .args(&[
+                "diff",
+                "--name-only",
+                &last_tag,
+                "HEAD",
+                "--",
+                &package.path,
+            ])
+            .output()
+            .expect("Failed to execute git diff command");
 
-            if git_diff_result.is_empty() {
-                println!("No changes detected. Skipping...");
-                continue;
+        let git_diff_result = String::from_utf8_lossy(&output.stdout);
+
+        if git_diff_result.is_empty() {
+            println!("No changes detected. Skipping...");
+            continue;
+        }
+
+        let interval = last_tag + "..HEAD";
+        let git_log_output = std::process::Command::new("git")
+            .args(&["log", &interval, "--oneline", "--", &package.path])
+            .output()
+            .expect("Failed to execute git log command");
+
+        let git_log_result = String::from_utf8_lossy(&git_log_output.stdout);
+
+        let mut changelog = Changelog {
+            features: String::new(),
+            fixes: String::new(),
+            perf: String::new(),
+            breaking: String::new(),
+        };
+
+        let mut semver_target: Semver = Semver::Patch;
+        for line in git_log_result.lines() {
+            let commit_message = format_commit_message(line);
+            if line.contains("feat(") {
+                changelog.features.push_str(&commit_message);
+                changelog.features.push_str("\n");
+                semver_target = get_higher_semver(semver_target, Semver::Minor);
+            }
+            if line.contains("fix(") {
+                changelog.fixes.push_str(&commit_message);
+                changelog.fixes.push_str("\n");
+                semver_target = get_higher_semver(semver_target, Semver::Patch);
+            }
+            if line.contains("perf(") {
+                changelog.perf.push_str(&commit_message);
+                changelog.perf.push_str("\n");
+                semver_target = get_higher_semver(semver_target, Semver::Patch);
+            }
+            if line.contains("!feat(") || line.contains("!fix(") {
+                changelog.breaking.push_str(&commit_message);
+                changelog.breaking.push_str("\n");
+                semver_target = get_higher_semver(semver_target, Semver::Major);
+            }
+        }
+
+        let new_version = increase_version(&version, semver_target, &environment);
+        let new_changelog = get_new_changelog(&name, &new_version, changelog);
+
+        if new_changelog.is_ok() {
+            let changelog_body = new_changelog.unwrap();
+
+            let current_changelog = fs::read_to_string(package.path.clone() + "/CHANGELOG.md").ok();
+            let updated_changelog = update_changelog(
+                current_changelog.as_deref(),
+                &name,
+                &changelog_body,
+                &dry_run_config,
+            )
+            .expect("Changelog update failed");
+
+            if !dry_run_config.is_dry_run {
+                fs::write(
+                    package.path.to_string() + "/CHANGELOG.md",
+                    updated_changelog,
+                )
+                .expect("Failed to write updated CHANGELOG.md");
             }
 
-            let interval = last_tag + "..HEAD";
-            let git_log_output = std::process::Command::new("git")
-                .args(&["log", &interval, "--oneline", "--", package_path])
-                .output()
-                .expect("Failed to execute git log command");
+            let filtered_changelog_body: String = changelog_body
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .collect::<Vec<&str>>()
+                .join("\n");
 
-            let git_log_result = String::from_utf8_lossy(&git_log_output.stdout);
+            pull_request_content.push_str(format!("## {} - {}\n", name, new_version).as_str());
+            pull_request_content.push_str(format!("{}\n\n", filtered_changelog_body).as_str());
+        }
 
-            let mut changelog = Changelog {
-                features: String::new(),
-                fixes: String::new(),
-                perf: String::new(),
-                breaking: String::new(),
+        update_package(&package.path, &new_version, &dry_run_config).unwrap();
+
+        println!(
+            "Updated package.json of {} to version {}",
+            name, new_version
+        );
+
+        if !package.extra_files.is_empty() {
+            increase_extra_files_version(&package.extra_files, &new_version, &dry_run_config);
+        } else {
+            println!("No extraFiles found for package {}", name);
+        }
+
+        changed_packages.insert(name.clone(), new_version.clone());
+        name_to_version.insert(name.to_string(), new_version.to_string());
+    }
+
+    // Second pass: update packages and their dependencies
+    for package in &manifest.packages {
+        let (name, version) = get_version_and_name(&package.path).unwrap();
+        let mut should_update = changed_packages.contains_key(&name);
+
+        if !should_update {
+            should_update = has_dependency_changes(package, &changed_packages);
+        }
+
+        if should_update {
+            // Determine new version (consider both direct changes and dependency updates)
+            let semver_target = if changed_packages.contains_key(&name) {
+                determine_semver_target(&name, &version)
+            } else {
+                Semver::Patch // For dependency updates, use patch version
             };
 
-            let mut semver_target: Semver = Semver::Patch;
-            for line in git_log_result.lines() {
-                let commit_message = format_commit_message(line);
-                if line.contains("feat(") {
-                    changelog.features.push_str(&commit_message);
-                    changelog.features.push_str("\n");
-                    semver_target = get_higher_semver(semver_target, Semver::Minor);
-                }
-                if line.contains("fix(") {
-                    changelog.fixes.push_str(&commit_message);
-                    changelog.fixes.push_str("\n");
-                    semver_target = get_higher_semver(semver_target, Semver::Patch);
-                }
-                if line.contains("perf(") {
-                    changelog.perf.push_str(&commit_message);
-                    changelog.perf.push_str("\n");
-                    semver_target = get_higher_semver(semver_target, Semver::Patch);
-                }
-                if line.contains("!feat(") || line.contains("!fix(") {
-                    changelog.breaking.push_str(&commit_message);
-                    changelog.breaking.push_str("\n");
-                    semver_target = get_higher_semver(semver_target, Semver::Major);
-                }
-            }
-
             let new_version = increase_version(&version, semver_target, &environment);
-            let new_changelog = get_new_changelog(&name, &new_version, changelog);
 
-            if new_changelog.is_ok() {
-                let changelog_body = new_changelog.unwrap();
+            update_package(&package.path, &new_version, &dry_run_config).unwrap();
 
-                let current_changelog =
-                    fs::read_to_string(package_path.to_string() + "/CHANGELOG.md").ok();
-                let updated_changelog = update_changelog(
-                    current_changelog.as_deref(),
-                    &name,
-                    &changelog_body,
-                    &dry_run_config,
-                )
-                .expect("Changelog update failed");
-
-                if !dry_run_config.is_dry_run {
-                    fs::write(
-                        package_path.to_string() + "/CHANGELOG.md",
-                        updated_changelog,
-                    )
-                    .expect("Failed to write updated CHANGELOG.md");
-                }
-
-                let filtered_changelog_body: String = changelog_body
-                    .lines()
-                    .filter(|line| !line.starts_with('#'))
-                    .collect::<Vec<&str>>()
-                    .join("\n");
-
-                pull_request_content.push_str(format!("## {} - {}\n", name, new_version).as_str());
-                pull_request_content.push_str(format!("{}\n\n", filtered_changelog_body).as_str());
+            if !package.extra_files.is_empty() {
+                increase_extra_files_version(&package.extra_files, &new_version, &dry_run_config);
             }
 
-            update_package(package_path, &new_version, &dry_run_config).unwrap();
-
-            println!(
-                "Updated package.json of {} to version {}",
-                name, new_version
-            );
-
-            if let Some(extra_files) = package["extraFiles"].as_array() {
-                increase_extra_files_version(&extra_files.to_vec(), &new_version, &dry_run_config);
-            } else {
-                println!("No extraFiles found for package {}", name);
-            }
-
-            name_to_version.insert(name.to_string(), new_version.to_string());
+            changed_packages.insert(name.clone(), new_version.clone());
         }
     }
 
@@ -510,8 +583,48 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::{mock, predicate::*};
     use std::fs;
     use tempfile::NamedTempFile;
+
+    mock! {
+        FileSystem {
+            fn read_to_string(&self, path: &str) -> std::io::Result<String>;
+            fn write(&self, path: &str, contents: &str) -> std::io::Result<()>;
+        }
+    }
+
+    mock! {
+        GitCommand {
+            fn diff(&self, last_tag: &str, path: &str) -> String;
+            fn log(&self, interval: &str) -> String;
+        }
+    }
+
+    fn setup_mocks() -> (MockFileSystem, MockGitCommand) {
+        let mut fs = MockFileSystem::new();
+        let git = MockGitCommand::new();
+
+        fs.expect_read_to_string()
+            .with(eq("releaser-manifest.json"))
+            .returning(|_| {
+                Ok(r#"{
+                    "packages": [
+                        {
+                            "path": "package1",
+                            "dependencies": ["package2"]
+                        },
+                        {
+                            "path": "package2",
+                            "dependencies": []
+                        }
+                    ]
+                }"#
+                .to_string())
+            });
+
+        (fs, git)
+    }
 
     #[test]
     fn test_increase_version() {
@@ -608,7 +721,7 @@ mod tests {
             );
             fs::write(&file_path, content).unwrap();
 
-            let extra_files = vec![serde_json::Value::String(file_path.clone())];
+            let extra_files = vec![file_path.clone()];
 
             increase_extra_files_version(
                 &extra_files,
@@ -684,5 +797,43 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, new_changelog_body);
+    }
+
+    #[test]
+    fn test_dependency_update() {
+        let (mut fs, mut git) = setup_mocks();
+
+        // Mock package1 (no changes)
+        fs.expect_read_to_string()
+            .with(eq("package1/package.json"))
+            .returning(|_| Ok(r#"{"name": "package1", "version": "1.0.0"}"#.to_string()));
+        git.expect_diff()
+            .with(eq("package1-v1.0.0"), eq("package1"))
+            .returning(|_, _| String::new());
+
+        // Mock package2 (with changes)
+        fs.expect_read_to_string()
+            .with(eq("package2/package.json"))
+            .returning(|_| Ok(r#"{"name": "package2", "version": "1.0.0"}"#.to_string()));
+        git.expect_diff()
+            .with(eq("package2-v1.0.0"), eq("package2"))
+            .returning(|_, _| "some_changed_file.js".to_string());
+        git.expect_log()
+            .with(eq("package2-v1.0.0..HEAD"))
+            .returning(|_| "abcdef1 fix(package2): some bugfix".to_string());
+
+        // Expect updates
+        fs.expect_write()
+            .with(
+                eq("package2/package.json"),
+                eq(r#"{"name": "package2", "version": "1.0.1"}"#),
+            )
+            .returning(|_, _| Ok(()));
+        fs.expect_write()
+            .with(
+                eq("package1/package.json"),
+                eq(r#"{"name": "package1", "version": "1.0.1"}"#),
+            )
+            .returning(|_, _| Ok(()));
     }
 }
