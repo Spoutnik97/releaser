@@ -1,4 +1,5 @@
 use clap::Parser;
+use colored::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Result, Value};
@@ -6,7 +7,26 @@ use std::io::Write;
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
-};
+}; // Add this to your dependencies
+
+// Add this helper function at the top level
+fn log_section(title: &str) {
+    println!("\n{}", "━".repeat(50).bright_black());
+    println!("{}", title.bright_blue().bold());
+    println!("{}", "━".repeat(50).bright_black());
+}
+
+fn log_success(message: &str) {
+    println!("{} {}", "✓".green(), message);
+}
+
+fn log_info(message: &str) {
+    println!("{} {}", "ℹ".blue(), message);
+}
+
+fn log_warning(message: &str) {
+    println!("{} {}", "⚠".yellow(), message);
+}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct Package {
@@ -401,28 +421,34 @@ fn main() {
         is_dry_run: args.dry_run,
     };
 
+    log_section("Release Process Started");
+
     if dry_run_config.is_dry_run {
-        println!("Running in dry-run mode. No changes will be made.");
+        log_warning("Running in dry-run mode - No changes will be made");
     }
+    log_info(&format!("Environment: {}", args.environment.bright_cyan()));
 
     let environment = &args.environment;
     let manifest: Manifest = get_manifest().unwrap();
     let mut changed_packages = HashMap::new();
-
     let mut pull_request_content = String::new();
-
     let mut name_to_version = HashMap::new();
-
     let mut tags_to_create = Vec::new();
+
+    log_section("Analyzing Packages");
 
     for package in &manifest.packages {
         let (name, version) = get_version_and_name(&package.path).unwrap();
         let last_tag = get_latest_tag(&name, &version, &environment).unwrap();
 
         println!(
-            "{}, -> {}: {} => latest tag: {}",
-            &package.path, name, version, last_tag
+            "{} {} ({})",
+            "📦".bright_cyan(),
+            name.bright_white().bold(),
+            package.path.bright_black()
         );
+        println!("   Current version: {}", version.bright_yellow());
+        println!("   Latest tag: {}", last_tag.bright_yellow());
 
         if args.tag {
             let tag = format!("{}-v{}", name, version);
@@ -456,11 +482,10 @@ fn main() {
                         }
                     }
                 }
+
+                log_success(&format!("Created new tag: {}", tag));
             } else {
-                println!(
-                    "Dry run: would create tag {} (if it doesn't already exist)",
-                    tag
-                );
+                log_info(&format!("Would create tag: {}", tag));
             }
 
             continue;
@@ -481,7 +506,8 @@ fn main() {
         let git_diff_result = String::from_utf8_lossy(&output.stdout);
 
         if git_diff_result.is_empty() {
-            println!("No changes detected. Skipping...");
+            log_info("No changes detected - Skipping");
+
             continue;
         }
 
@@ -560,10 +586,12 @@ fn main() {
 
         update_package(&package.path, &new_version, &dry_run_config).unwrap();
 
-        println!(
-            "Updated package.json of {} to version {}",
-            name, new_version
-        );
+        log_success(&format!(
+            "Updated {} from {} to {}",
+            name,
+            version.bright_yellow(),
+            new_version.bright_green()
+        ));
 
         if !package.extra_files.is_empty() {
             increase_extra_files_version(&package.extra_files, &new_version, &dry_run_config);
@@ -619,12 +647,16 @@ fn main() {
             }
         }
 
-        println!(
-            "List of tags to create has been written to {}",
-            tags_file_path
-        );
+        log_section("Tag Creation Summary");
+        log_success(&format!(
+            "Created {} tags - List written to {}",
+            tags_to_create.len(),
+            "tags_to_create.txt".bright_cyan()
+        ));
         return ();
     }
+
+    log_section("Commit Changes");
     if !dry_run_config.is_dry_run {
         std::process::Command::new("git")
             .args(&["add", "."])
@@ -640,12 +672,21 @@ fn main() {
             .args(&["commit", "-m", &commit_message])
             .output()
             .expect("Failed to execute git commit command");
-        println!("Created new commit: {}", commit_message);
+        log_success("Created new commit with version bumps");
     } else {
-        println!("Dry run: Would execute git commands");
+        log_info("Would create git commit with version bumps");
     }
-    fs::write("pull_request_content.md", pull_request_content).unwrap();
-    println!("Pull request content written to pull_request_content.md");
+
+    if !dry_run_config.is_dry_run {
+        fs::write("pull_request_content.md", pull_request_content).unwrap();
+    }
+
+    log_section("Summary");
+    log_success(&format!(
+        "Updated {} packages",
+        changed_packages.len().to_string().bright_green()
+    ));
+    log_success("Pull request content written to pull_request_content.md");
 }
 
 #[cfg(test)]
