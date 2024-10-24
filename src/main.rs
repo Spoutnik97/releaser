@@ -49,9 +49,38 @@ fn get_version_and_name(path: &str) -> Result<(String, String)> {
     Ok((name.to_string(), version.to_string()))
 }
 
-fn get_latest_tag(name: &str, version: &str) -> Result<String> {
-    let tag = format!("{}-v{}", name, version);
-    Ok(tag)
+fn get_latest_tag(name: &str, version: &str, environment: &str) -> Result<String> {
+    let tag_prefix = format!("{}-v", name);
+
+    // Get all tags for this package
+    let output = std::process::Command::new("git")
+        .args(&["tag", "-l", &format!("{}*", tag_prefix)])
+        .output()
+        .expect("Failed to execute git tag command");
+
+    let tags = String::from_utf8_lossy(&output.stdout);
+
+    // Filter and sort tags based on environment
+    let latest_tag = tags
+        .lines()
+        .filter(|tag| {
+            if environment == "production" {
+                !tag.contains("-beta")
+            } else {
+                true // In non-production, consider all tags
+            }
+        })
+        .max_by(|a, b| {
+            // Custom comparison for semantic versioning
+            let version_a = a.trim_start_matches(&tag_prefix);
+            let version_b = b.trim_start_matches(&tag_prefix);
+            semver_compare(version_a, version_b)
+        });
+
+    match latest_tag {
+        Some(tag) => Ok(tag.to_string()),
+        None => Ok(format!("{}-v{}", name, version)), // Return current version if no tags found
+    }
 }
 
 enum Semver {
@@ -77,6 +106,45 @@ fn get_higher_semver(current_semver: Semver, new_semver: Semver) -> Semver {
             Semver::Minor => Semver::Major,
             Semver::Major => Semver::Major,
         },
+    }
+}
+
+// Helper function to compare semantic versions
+fn semver_compare(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parts: Vec<&str> = a.split('-').collect();
+    let b_parts: Vec<&str> = b.split('-').collect();
+
+    // Compare main version numbers first
+    let a_version = a_parts[0].split('.').collect::<Vec<&str>>();
+    let b_version = b_parts[0].split('.').collect::<Vec<&str>>();
+
+    // Compare major.minor.patch
+    for i in 0..3 {
+        let a_num = a_version[i].parse::<u32>().unwrap_or(0);
+        let b_num = b_version[i].parse::<u32>().unwrap_or(0);
+        match a_num.cmp(&b_num) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+
+    // If versions are equal, compare beta versions
+    match (a_parts.get(1), b_parts.get(1)) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Greater, // Release is greater than beta
+        (Some(_), None) => std::cmp::Ordering::Less,    // Beta is less than release
+        (Some(a_beta), Some(b_beta)) => {
+            // Compare beta version numbers if present
+            let a_beta_num = a_beta
+                .trim_start_matches("beta.")
+                .parse::<u32>()
+                .unwrap_or(0);
+            let b_beta_num = b_beta
+                .trim_start_matches("beta.")
+                .parse::<u32>()
+                .unwrap_or(0);
+            a_beta_num.cmp(&b_beta_num)
+        }
     }
 }
 
@@ -284,8 +352,8 @@ fn increase_extra_files_version(
     }
 }
 
-fn determine_semver_target(name: &str, version: &str) -> Semver {
-    let last_tag = get_latest_tag(name, version).unwrap();
+fn determine_semver_target(name: &str, version: &str, environment: &str) -> Semver {
+    let last_tag = get_latest_tag(name, version, environment).unwrap();
     let interval = format!("{}..HEAD", last_tag);
     let git_log_output = std::process::Command::new("git")
         .args(&["log", &interval, "--oneline"])
@@ -349,10 +417,10 @@ fn main() {
 
     for package in &manifest.packages {
         let (name, version) = get_version_and_name(&package.path).unwrap();
-        let last_tag = get_latest_tag(&name, &version).unwrap();
+        let last_tag = get_latest_tag(&name, &version, &environment).unwrap();
 
         println!(
-            "{}, -> {}: {} => tag: {}",
+            "{}, -> {}: {} => latest tag: {}",
             &package.path, name, version, last_tag
         );
 
@@ -519,7 +587,7 @@ fn main() {
         if should_update {
             // Determine new version (consider both direct changes and dependency updates)
             let semver_target = if changed_packages.contains_key(&name) {
-                determine_semver_target(&name, &version)
+                determine_semver_target(&name, &version, &environment)
             } else {
                 Semver::Patch // For dependency updates, use patch version
             };
@@ -835,5 +903,102 @@ mod tests {
                 eq(r#"{"name": "package1", "version": "1.0.1"}"#),
             )
             .returning(|_, _| Ok(()));
+    }
+
+    #[test]
+    fn test_get_latest_tag() {
+        // Setup test environment
+        let setup_git_tags = |tags: &[&str]| {
+            // Clear existing tags
+            let _ = std::process::Command::new("git")
+                .args(&["tag", "-d"])
+                .args(tags)
+                .output();
+
+            // Create new tags
+            for tag in tags {
+                let _ = std::process::Command::new("git")
+                    .args(&["tag", tag])
+                    .output();
+            }
+        };
+
+        // Test case 1: Production environment with mixed tags
+        let tags = &[
+            "package-a-v1.0.0",
+            "package-a-v1.0.1-beta",
+            "package-a-v1.0.1",
+            "package-a-v1.1.0-beta.1",
+        ];
+        setup_git_tags(tags);
+
+        assert_eq!(
+            get_latest_tag("package-a", "1.0.0", "production").unwrap(),
+            "package-a-v1.0.1"
+        );
+
+        // Test case 2: Staging environment with beta tags
+        assert_eq!(
+            get_latest_tag("package-a", "1.0.0", "staging").unwrap(),
+            "package-a-v1.1.0-beta.1"
+        );
+
+        // Test case 3: No tags exist
+        let no_tags_package = "package-b";
+        assert_eq!(
+            get_latest_tag(no_tags_package, "1.0.0", "production").unwrap(),
+            format!("{}-v1.0.0", no_tags_package)
+        );
+
+        // Cleanup
+        let _ = std::process::Command::new("git")
+            .args(&["tag", "-d"])
+            .args(tags)
+            .output();
+    }
+
+    #[test]
+    fn test_semver_compare() {
+        // Test regular versions
+        assert!(matches!(
+            semver_compare("1.0.0", "1.0.1"),
+            std::cmp::Ordering::Less
+        ));
+        assert!(matches!(
+            semver_compare("1.1.0", "1.0.1"),
+            std::cmp::Ordering::Greater
+        ));
+        assert!(matches!(
+            semver_compare("1.0.0", "1.0.0"),
+            std::cmp::Ordering::Equal
+        ));
+
+        // Test beta versions
+        assert!(matches!(
+            semver_compare("1.0.0-beta", "1.0.0"),
+            std::cmp::Ordering::Less
+        ));
+        assert!(matches!(
+            semver_compare("1.0.0", "1.0.0-beta"),
+            std::cmp::Ordering::Greater
+        ));
+        assert!(matches!(
+            semver_compare("1.0.0-beta.1", "1.0.0-beta.2"),
+            std::cmp::Ordering::Less
+        ));
+        assert!(matches!(
+            semver_compare("1.0.0-beta.2", "1.0.0-beta.1"),
+            std::cmp::Ordering::Greater
+        ));
+
+        // Test mixed scenarios
+        assert!(matches!(
+            semver_compare("1.0.1-beta", "1.0.0"),
+            std::cmp::Ordering::Greater
+        ));
+        assert!(matches!(
+            semver_compare("1.0.0-beta", "1.0.1"),
+            std::cmp::Ordering::Less
+        ));
     }
 }
