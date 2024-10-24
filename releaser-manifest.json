@@ -1,1 +1,10 @@
-[{ "path": "packages/api", "extraFiles": ["packages/api/index.js"] }]
+[
+  {
+    "path": "packages/api",
+    "extraFiles": ["packages/api/index.js"],
+    "dependencies": ["web"]
+  },
+  {
+    "path": "packages/web"
+  }
+]

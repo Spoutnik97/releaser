@@ -36,8 +36,12 @@ Create a `releaser-manifest.json` file in the root of your project.
 ```json
 [
   {
-    "path": "packages/api",
-    "extraFiles": ["packages/api/index.js"]
+    "path": "packages/api", // path to the package
+    "extraFiles": ["packages/api/index.js"] // optional: extra files to be updated. You need to comment // x-releaser-version on the lines you want to update
+    "dependencies": ["shared"] // optional: name of the packages that this package depends on
+  },
+  {
+    "path": "packages/shared"
   }
 ]
 ```
