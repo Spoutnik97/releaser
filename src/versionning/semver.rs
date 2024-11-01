@@ -152,6 +152,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_semver_compare() {
         // Test regular versions
         assert!(matches!(
