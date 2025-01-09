@@ -230,45 +230,34 @@ Then run:
 $ cross build --release --target x86_64-unknown-linux-gnu
 ```
 
-## Create a Github PAT Token
+## Configuring a Github Personal Access Token
 
-When creating a Personal Access Token (PAT) for use in GitHub Actions, you should carefully consider the permissions needed for your specific workflow. Based on your current workflow requirements, here are the recommended permissions for your PAT:
+The following link can be used as a shortcut to create your token: https://github.com/settings/tokens/new?description=Releaser&scopes=repo,workflows
 
-1. repo (Full control of private repositories)
+Otherwise, you can manually create it:
 
-   - This includes access to code, commit statuses, pull requests, and repository hooks.
+Go to https://github.com/settings/tokens
 
-2. workflow (Update GitHub Action workflows)
+For Classic Token:
 
-   - This allows the token to modify and trigger workflows.
+1. Click "Generate new token"
+2. Give your token a descriptive name
+3. Select the following scopes:
+   - `repo` (Full control of private repositories)
+   - `workflow` (if you need to trigger workflows)
+4. Click "Generate token".
+5. Copy the token
 
-3. write:packages (Write packages to GitHub Package Registry)
+For Fine Grained Token:
 
-   - If your workflow involves publishing packages.
-
-4. read:org (Read org and team membership, read org projects)
-
-   - This might be necessary if your repository is part of an organization.
-
-5. gist (Create gists)
-   - Only if your workflow creates gists.
-
-Here's a step-by-step guide to create a PAT with these permissions:
-
-1. Go to your GitHub account settings.
-2. Click on "Developer settings" in the left sidebar.
-3. Click on "Personal access tokens" and then "Tokens (classic)".
-4. Click "Generate new token" and select "Generate new token (classic)".
-5. Give your token a descriptive name, e.g., "GitHub Actions Staging Release".
-6. Set an expiration date (consider security implications when setting this).
-7. Select the following scopes:
-   - repo
-   - workflow
-   - write:packages
-   - read:org
-   - gist (if needed)
-8. Click "Generate token" at the bottom of the page.
-9. Copy the token immediately (you won't be able to see it again).
+1. Click "Generate new token"
+2. Give your token a descriptive name
+3. Select the following scopes:
+   - contents
+   - pull-requests
+   - issues
+4. Click "Generate token".
+5. Copy the token
 
 After generating the token:
 
